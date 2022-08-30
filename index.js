@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         图书分享
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  尝试分享自己购买的掘金小册，大家一起学习~
 // @author       gkshi
 // @match        https://juejin.cn/book/*/section/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=juejin.cn
 // @grant        none
+// @license      MIT
 // ==/UserScript==
 
 (function () {
@@ -81,7 +82,7 @@ function juejin (interceptor, uploadFunc) {
 
   // TODO step4: 开始模拟点击左侧章节，生成状态
   // 如果是在第一章激活的情况下开始复制，默认从第二章开始，最后回过头来模拟点击第一章
-  let activedFisrt = null
+  let activedFirst = null
   let activedIdx = -1
   let currentIdx = -1
   function crawlSection (dirArr, idx) {
@@ -89,16 +90,16 @@ function juejin (interceptor, uploadFunc) {
     let cur = dirArr[newIdx]
     if (!cur) {
       // 最后回头拿最开始激活的章节
-      if (activedFisrt) {
+      if (activedFirst) {
         currentIdx = activedIdx
-        createLoading(activedFisrt)
-        activedFisrt.click()
-        activedFisrt = null
+        createLoading(activedFirst)
+        activedFirst.click()
+        activedFirst = null
       }
       return
     }
     if (cur.className.includes('active')) {
-      activedFisrt = cur
+      activedFirst = cur
       activedIdx = newIdx
       newIdx++
       cur = dirArr[newIdx]
@@ -188,7 +189,7 @@ function juejin (interceptor, uploadFunc) {
 
   function reset () {
     book.sections = []
-    let activedFisrt = null
+    let activedFirst = null
     let activedIdx = -1
     let currentIdx = -1
     let successCount = 0

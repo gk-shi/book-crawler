@@ -189,10 +189,10 @@ function juejin (interceptor, uploadFunc) {
 
   function reset () {
     book.sections = []
-    let activedFirst = null
-    let activedIdx = -1
-    let currentIdx = -1
-    let successCount = 0
+    activedFirst = null
+    activedIdx = -1
+    currentIdx = -1
+    successCount = 0
   }
 
   return () => {

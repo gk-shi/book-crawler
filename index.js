@@ -39,7 +39,7 @@ function juejin (interceptor, uploadFunc) {
   let sectionQueue = []
 
   // TODO step1: 先拦截小册的基本信息，包括：标题、封面、各章节顺序等
-  function bookInterceptor (promise) {
+  const bookInterceptor = (promise) => {
     promise.then(data => {
       const baseInfo = data.data.booklet.base_info
       sectionQueue = data.data.sections
@@ -54,7 +54,7 @@ function juejin (interceptor, uploadFunc) {
   interceptor.pushRule(bookletRule)
 
   // TODO step2: 往页面中插入自定义元素：开始复制按钮等
-  function addCopyBtn () {
+  const addCopyBtn = () => {
     let timeout
     timeout = setTimeout(() => {
       const title = document.querySelector('.book-content__header .title')
@@ -64,7 +64,7 @@ function juejin (interceptor, uploadFunc) {
     }, 1000)
   }
 
-  function createCopyBtn (title) {
+  const createCopyBtn = (title) => {
     if (!title) return
     const btn = document.createElement('button')
     btn.textContent = '开始复制'
@@ -74,7 +74,7 @@ function juejin (interceptor, uploadFunc) {
 
   // TODO step3: 处理点击 开始复制 后的操作
   let dirOfSection = [] // 左边生成的目录章节
-  function startCopy () {
+  const startCopy = () => {
     const dir = document.querySelectorAll('.section-list .section')
     dir.forEach(el => dirOfSection.push(el))
     crawlSection(dirOfSection, 0)
@@ -85,7 +85,7 @@ function juejin (interceptor, uploadFunc) {
   let activedFirst = null
   let activedIdx = -1
   let currentIdx = -1
-  function crawlSection (dirArr, idx) {
+  const crawlSection = (dirArr, idx) => {
     let newIdx = idx
     let cur = dirArr[newIdx]
     if (!cur) {
@@ -111,7 +111,7 @@ function juejin (interceptor, uploadFunc) {
     }
   }
 
-  function createLoading (cur) {
+  const createLoading = (cur) => {
     const loading = document.createElement('span')
     loading.textContent = '抓取中...'
     loading.className = 'loading-span'
@@ -119,7 +119,7 @@ function juejin (interceptor, uploadFunc) {
     cur.appendChild(loading)
   }
 
-  function changeLoadingStatus (idx, flag) {
+  const changeLoadingStatus = (idx, flag) => {
     const el = dirOfSection[idx]
     const spans = el.querySelectorAll('.loading-span')
     const span = spans[spans.length - 1]
@@ -133,25 +133,34 @@ function juejin (interceptor, uploadFunc) {
     }
   }
 
-  //TODO step5: 拦截每一章节并获取内容
+  //TODO step5: 拦截每一章节并获取内容、评论
   let successCount = 0
-  function sectionInterceptor (promise) {
+  let articleAndCommentOvered = 0 // 用来判断文章和评论都抓取完
+  const next = (from) => {
+  if (articleAndCommentOvered === 0) {
+    articleAndCommentOvered = 1
+    return
+  }
+  successCount++
+  if (successCount === dirOfSection.length) {
+    sortSectionsAndUpload()
+    return
+  }
+  articleAndCommentOvered = 0
+  setTimeout(() => {
+    crawlSection(dirOfSection, currentIdx + 1)
+  }, getRandomTime())
+}
+  const sectionInterceptor = (promise) => {
     if (currentIdx === -1) {
       // 如果不是点击复制按钮后的拦截，不予以保存
       return
     }
     promise.then(data => {
-      const { section_id, id, content, title, booklet_id } = data.data.section
-      book.sections.push({ id, booklet_id, section_id, title, content })
+      const { section_id, id, content, title, booklet_id, user_id } = data.data.section
+      book.sections.push({ id, booklet_id, section_id, title, content, user_id })
       changeLoadingStatus(currentIdx, 'success')
-      successCount++
-      if (successCount !== dirOfSection.length) {
-        setTimeout(() => {
-          crawlSection(dirOfSection, currentIdx + 1)
-        }, getRandomTime())
-      } else {
-        sortSectionsAndUpload()
-      }
+      next()
     }).catch((error) => {
       console.log('error: ', error)
       changeLoadingStatus(currentIdx, 'failed')
@@ -167,33 +176,82 @@ function juejin (interceptor, uploadFunc) {
     url: 'api.juejin.cn/booklet_api/v1/section/get',
     interceptor: sectionInterceptor
   }
+  interceptor.pushRule(sectionRule, 'response')
 
-  interceptor.pushRule(sectionRule)
-
-  // TODO step6: 章节排序并调用上传服务器接口
-  function sortSectionsAndUpload () {
-    const sections = book.sections
-    const obj2Section = {}
-    sections.forEach(s => {
-      obj2Section[s.id] = s
-    })
-
-    const sorted = []
-    sectionQueue.forEach((so, idx) => {
-      sorted.push({ ...obj2Section[so.id], no_id: idx + 1 })
-    })
-    book.sections = sorted
-    uploadFunc && uploadFunc(JSON.parse(JSON.stringify(book)))
-    reset()
+  // TODO step6: 评论相关
+  /*
+    评论请求拦截，直接拉取 500 条，一次性拉完
+  */
+  const commentRequestInterceptor = (args) => {
+    const body = JSON.parse(args[1].body)
+    args[1].body = JSON.stringify({ ...body, limit: 500 })
   }
+  const commentRequestRule = {
+    url: 'api.juejin.cn/interact_api/v1/comment/list',
+    interceptor: commentRequestInterceptor
+  }
+  interceptor.pushRule(commentRequestRule, 'request')
 
-  function reset () {
+  let sectionId2Comments = {}
+  const commentResponseInterceptor = (promise, args) => {
+    if (currentIdx === -1) return
+    promise.then(data => {
+      const sectionId = JSON.parse(args[1].body).item_id
+      const comments = data.data.map(d => {
+        const { comment_info, reply_infos, user_info } = d
+        const { comment_content, comment_pics } = comment_info || {}
+        const { user_name, user_id, avatar_large } = user_info || {}
+        const comment = { user_name, user_id, avatar_large, comment_content, comment_pics, replys: [] }
+        ;(reply_infos || []).forEach(reply => {
+          const { reply_info, user_info: rUser } = reply
+          const { reply_content, reply_pics } = reply_info || {}
+          const { user_name: rUserName, user_id: rUserId, avatar_large: rAvatar } = rUser || {}
+          const r = { user_name: rUserName, user_id: rUserId, avatar_large: rAvatar, reply_content, reply_pics }
+          comment.replys.push(r)
+        })
+        return comment
+      })
+      sectionId2Comments[sectionId] = comments
+      next()
+    })
+  }
+  const commentResponseRule = {
+    url: 'api.juejin.cn/interact_api/v1/comment/list',
+    interceptor: commentResponseInterceptor
+  }
+  interceptor.pushRule(commentResponseRule, 'response')
+
+
+  const reset = () => {
     book.sections = []
+    book.comments = []
     activedFirst = null
     activedIdx = -1
     currentIdx = -1
     successCount = 0
   }
+  // TODO step7: 章节排序(整合对应评论)并调用上传服务器接口
+  function sortSectionsAndUpload () {
+    const { sections, booklet_id } = book
+    const obj2Section = {}
+    sections.forEach(s => {
+      obj2Section[s.id] = s
+    })
+
+    const sortedSection = []
+    const comments = []
+    sectionQueue.forEach((so, idx) => {
+      const section = obj2Section[so.id]
+      sortedSection.push({ ...section, no_id: idx + 1 })
+      const comment = sectionId2Comments[so.section_id]
+      comments.push({ booklet_id, author_id: section.user_id, section_id: so.section_id, comment })
+    })
+    book.sections = sortedSection
+    book.comments = comments
+    uploadFunc && uploadFunc(JSON.parse(JSON.stringify(book)))
+    reset()
+  }
+
 
   return () => {
     addCopyBtn()
@@ -212,15 +270,20 @@ function juejin (interceptor, uploadFunc) {
  * @description: 拦截器相关配置
  * @return {Object}
  */
- function injectInterceptor () {
+function injectInterceptor () {
   let config = {
-    rules: [],
-    pushRule: function (rule) {
+    requestRules: [],
+    responseRules: [],
+    pushRule: function (rule, stage = 'response') {
       const { url, interceptor } = rule || {}
       if (!url || !interceptor || !(interceptor instanceof Function)) {
         throw new Error(`配置规则有误：${rule}，请参照：{ url: 字符串或正则, interceptor: 函数 }格式。`)
       }
-      config.rules.push(rule)
+      if (stage === 'response') {
+        config.responseRules.push(rule)
+      } else if (stage === 'request') {
+        config.requestRules.push(rule)
+      }
     },
     originalXHR: window.XMLHttpRequest,
     myXHR: function () {
@@ -229,10 +292,17 @@ function juejin (interceptor, uploadFunc) {
         if (attr === 'onload') {
           xhr.onload = (...args) => {
             // 请求成功
-            intercept(config.rules, this.responseURL, this)
+            responseIntercept(config.responseRules, this.responseURL, this)
             this.onload && this.onload.apply(this, args)
           }
           continue
+        }
+        if (attr === 'open' || attr === 'send') {
+          const handler = xhr[attr]
+          xhr[attr] = (...args) => {
+            requestIntercept(config.requestRules, xhr.responseURL, args, attr)
+            handler.apply(xhr, args)
+          }
         }
         if (typeof xhr[attr] === 'function') {
           this[attr] = xhr[attr].bind(xhr)
@@ -248,11 +318,12 @@ function juejin (interceptor, uploadFunc) {
 
     originalFetch: window.fetch.bind(window),
     myFetch: function (...args) {
+      requestIntercept(config.requestRules, args[0], args)
       return config.originalFetch(...args).then((response) => {
         const json = response.json
         response.json = function () {
           const jsonRes = json.call(this)
-          intercept(config.rules, response.url, jsonRes)
+          responseIntercept(config.responseRules, response.url, jsonRes, args)
           return jsonRes
         }
         return response
@@ -260,14 +331,26 @@ function juejin (interceptor, uploadFunc) {
     }
   }
 
-  function intercept (rules, target, data) {
+  function requestIntercept(rules, target, args, xhrType) {
     rules.some(({ url, interceptor }) => {
       let urlReg = url
       if (!(url instanceof RegExp)) {
         urlReg = new RegExp(url, 'ig')
       }
       if (urlReg.test(target)) {
-        interceptor && interceptor(data)
+        interceptor && interceptor(args, xhrType)
+        return true
+      }
+    })
+  }
+  function responseIntercept (rules, target, data, fetchArgs) {
+    rules.some(({ url, interceptor }) => {
+      let urlReg = url
+      if (!(url instanceof RegExp)) {
+        urlReg = new RegExp(url, 'ig')
+      }
+      if (urlReg.test(target)) {
+        interceptor && interceptor(data, fetchArgs)
         return true
       }
     })
@@ -366,7 +449,3 @@ function postServer (book) {
     if (icon) icon.remove()
   }
 }
-
-
-
-
